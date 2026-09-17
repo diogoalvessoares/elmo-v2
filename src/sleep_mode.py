@@ -25,10 +25,6 @@ class SleepMode:
     Owns the onboard display during idle mode. Yields it to behaviours
     when they raise their active flag, and resumes when the flag clears.
 
-    Publishes eye state through mw.Sleep().eyes_open (True = open, False = closed)
-    so behaviours can choose the correct transition animation without depending on
-    sleep_mode internals.
-
     > ## Attributes
 
     ``touch : mw.TouchSensors`` : Middleware touch sensor state.
@@ -39,15 +35,13 @@ class SleepMode:
 
     ``mode_manager : ModeManager`` : Mode manager used to determine idle and active states.
 
-    ``sleep : mw.Sleep`` : Middleware sleep state (enabled, sleeping, eyes_open,
-    timeout, last_activity, last_interaction).
+    ``sleep : mw.Sleep`` : Middleware sleep state (enabled, sleeping, timeout,
+    last_activity, last_interaction).
 
     ``node : mw.Node`` : Middleware node helper, used for logging.
 
     ``activity : mw.Activity`` : Middleware activity state, used to detect behaviours
     that have temporarily taken ownership of the display.
-
-    ``current_state : str | None`` : Current eye state label.
 
     ``last_idle_state : bool | None`` : Last detected idle state.
 
@@ -74,12 +68,11 @@ class SleepMode:
         self.activity = mw.Activity()
 
         self.sleep.last_activity = time.time()
-        self.current_state = None
+        self.sleep.sleeping = False
         self.last_idle_state = None
         self.was_behaviour_active = False
         self.next_state = time.time() + self.sleep.timeout
         self.wake_event = Event()
-        self.sleep.eyes_open = True
 
         Thread(target=self.monitor_touch, daemon=True).start()
         Thread(target=self.monitor_mode, daemon=True).start()
@@ -160,7 +153,7 @@ class SleepMode:
 
         Plays open_dark.webm and waits for the browser to confirm playback
         has ended. The video already ends on the dark frame so no image
-        restore is needed. Publishes eyes_open=False.
+        restore is needed. Publishes sleeping=True.
         No-op if already sleeping.
         """
         if self.sleep.sleeping:
@@ -169,15 +162,13 @@ class SleepMode:
         while self.display.video is not None:
             time.sleep(0.05)
         self.sleep.sleeping = True
-        self.current_state = "dark"
-        self.sleep.eyes_open = False
 
     def eyes_opening(self):
         """
         Wake from dark to open eyes.
 
         Plays dark_open.webm, waits for playback to finish, then restores
-        the open static image. Publishes eyes_open=True and resets the
+        the open static image. Publishes sleeping=False and resets the
         activity timer.
         """
         self.display.video = self.server.url_for_video("dark_open.webm")
@@ -185,8 +176,6 @@ class SleepMode:
             time.sleep(0.05)
         self.display.image = self.server.url_for_image("normal.png")
         self.sleep.sleeping = False
-        self.current_state = "open"
-        self.sleep.eyes_open = True
         self.sleep.last_activity = time.time()
 
     def eyes_look_around(self):
@@ -239,7 +228,6 @@ class SleepMode:
                 continue
             if self.was_behaviour_active:
                 self.was_behaviour_active = False
-                self.current_state = None
             inactive_time = time.time() - self.sleep.last_activity
 
             if self.is_idle_mode():
@@ -253,19 +241,15 @@ class SleepMode:
                     else:
                         self.eyes_look_around()
                 else:
-                    if self.current_state != "open":
-                        self.display.image = self.server.url_for_image("normal.png")
-                        self.current_state = "open"
-                        self.sleep.eyes_open = True
-            else:
-                if self.current_state != "open":
                     if self.sleep.sleeping:
-                        self.eyes_opening()
-                    else:
                         self.display.image = self.server.url_for_image("normal.png")
-                        self.current_state = "open"
-                        self.sleep.eyes_open = True
-                    self.sleep.last_activity = time.time()
+                        self.sleep.sleeping = False
+            else:
+                if self.sleep.sleeping:
+                    self.eyes_opening()
+                else:
+                    self.display.image = self.server.url_for_image("normal.png")
+                self.sleep.last_activity = time.time()
 
             self.wake_event.wait(timeout=1.0)
             self.wake_event.clear()
