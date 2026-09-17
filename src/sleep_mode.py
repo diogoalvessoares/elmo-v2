@@ -21,12 +21,6 @@ import middleware as mw
 EYES_OPENED = 1
 EYES_CLOSED = 2
 
-VIDEO_DURATIONS = {
-    "open_dark.webm": 2.0,
-    "dark_open.webm": 2.0,
-    "dark_squint_dark.webm": 7.0,
-}
-
 
 class SleepMode:
     """
@@ -43,23 +37,28 @@ class SleepMode:
 
     ``touch : mw.TouchSensors`` : Middleware touch sensor state.
 
-    ``gpio : mw.GPIO`` : Middleware GPIO state.
-
     ``display : mw.Onboard`` : Middleware onboard display controller.
 
     ``server : mw.Server`` : Middleware server helper for resource URLs.
 
     ``mode_manager : ModeManager`` : Mode manager used to determine idle and active states.
 
-    ``video_urls : dict`` : Mapping between filenames and resolved video URLs.
+    ``sleep : mw.Sleep`` : Middleware sleep state (enabled, sleeping, eye_state,
+    timeout, last_activity, last_interaction).
 
-    ``last_activity : float`` : Timestamp of the latest detected interaction.
+    ``node : mw.Node`` : Middleware node helper, used for logging.
+
+    ``activity : mw.Activity`` : Middleware activity state, used to detect behaviours
+    that have temporarily taken ownership of the display.
+
+    ``video_urls : dict`` : Mapping between filenames and resolved video URLs.
 
     ``current_state : str | None`` : Current eye state label.
 
     ``last_idle_state : bool | None`` : Last detected idle state.
 
-    ``playing_video : bool`` : True while a transition video is active.
+    ``was_behaviour_active : bool`` : Whether a behaviour owned the display on the
+    previous iteration, used to force a redraw once it releases the display.
 
     ``wake_event : threading.Event`` : Synchronisation event used to wake the main loop.
 
@@ -70,7 +69,7 @@ class SleepMode:
 
     def __init__(self):
         """
-        Initialise middleware objects, pre-resolve URLs, and start monitor threads.
+        Initialise middleware objects and start monitor threads.
         """
         self.touch = mw.TouchSensors()
         self.display = mw.Onboard()
@@ -78,21 +77,16 @@ class SleepMode:
         self.mode_manager = ModeManager()
         self.sleep = mw.Sleep()
         self.node = mw.Node()
-
-        self.video_urls = {
-            f: self.server.url_for_video(f)
-            for f in ["open_dark.webm", "dark_open.webm", "dark_squint_dark.webm"]
-        }
+        self.activity = mw.Activity()
 
         self.sleep.last_activity = time.time()
         self.current_state = None
         self.last_idle_state = None
-        self.playing_video = False
         self.was_behaviour_active = False
         self.next_state = time.time() + self.sleep.timeout
         self.wake_event = Event()
-
         self.sleep.eye_state = EYES_OPENED
+
         Thread(target=self.monitor_touch, daemon=True).start()
         Thread(target=self.monitor_mode, daemon=True).start()
 
@@ -136,7 +130,7 @@ class SleepMode:
                     self.sleep.last_activity = t
                     self.wake_event.set()
             except TypeError:
-                self.node.loginfo("Invalid slee.last_interaction value.")
+                self.node.loginfo("Invalid sleep.last_interaction value.")
                 pass
             time.sleep(0.2)
 
@@ -150,7 +144,12 @@ class SleepMode:
             True if no active non-idle behaviour is running.
         """
         b = self.mode_manager.behaviours
-        return not (b.conversation or b.photographer or b.akinator or b.wifi_connect)
+        return not (
+            b.conversation or 
+            b.photographer or 
+            b.akinator or 
+            b.wifi_connect
+        )
 
     def is_behaviour_active(self):
         """
@@ -160,12 +159,7 @@ class SleepMode:
         -------
         bool
         """
-        try:
-            return mw.get_key("behaviour_blush_active") or mw.get_key(
-                "behaviour_hello_active"
-            )
-        except TypeError:
-            return False
+        return bool(self.activity.blush) or bool(self.activity.hello)
 
     def set_image(self, url, state, eye_state):
         """
@@ -187,17 +181,19 @@ class SleepMode:
             self.current_state = state
             self.sleep.eye_state = eye_state
 
-    def play_video(self, filename, then_image_url=None, restore=True):
+    def play_video(self, filename, fallback_duration, then_image_url=None, restore=True):
         """
         Play a transition video and wait for it to finish.
 
-        Uses known clip duration as timing fallback since Onboard does not
-        expose a video_playing flag.
+        Uses fallback_duration as a fixed-time fallback since Onboard does not
+        always expose a video_playing flag.
 
         Parameters
         ----------
         filename : str
             Video filename (e.g. "dark_open.webm").
+        fallback_duration : float
+            Seconds to wait if the display can't report when playback ends.
         then_image_url : str, optional
             Static image URL to restore after playback. Defaults to normal.png.
             Only used when restore=True.
@@ -207,20 +203,18 @@ class SleepMode:
             forcing an image while the video is still playing would interrupt
             it mid-frame and cause a visual double-play artifact.
         """
-        self.playing_video = True
-        self.display.video = self.video_urls[filename]
+        self.display.video = self.server.url_for_video(filename)
         if hasattr(self.display, "video_playing"):
             while self.display.video_playing:
                 time.sleep(0.05)
         else:
-            time.sleep(VIDEO_DURATIONS.get(filename, 3.0))
+            time.sleep(fallback_duration)
         if restore:
             self.display.image = (
                 then_image_url
                 if then_image_url is not None
                 else self.server.url_for_image("normal.png")
             )
-        self.playing_video = False
 
     def eyes_closing(self):
         """
@@ -234,7 +228,7 @@ class SleepMode:
         """
         if self.sleep.sleeping:
             return
-        self.play_video("open_dark.webm", restore=False)
+        self.play_video("open_dark.webm", 2.0, restore=False)
         self.sleep.sleeping = True
         self.current_state = "dark"
         self.sleep.eye_state = EYES_CLOSED
@@ -247,7 +241,7 @@ class SleepMode:
         Publishes EYES_OPENED and resets the activity timer.
         """
         self.play_video(
-            "dark_open.webm", then_image_url=self.server.url_for_image("normal.png")
+            "dark_open.webm", 2.0, then_image_url=self.server.url_for_image("normal.png")
         )
         self.sleep.sleeping = False
         self.current_state = "open"
@@ -268,16 +262,14 @@ class SleepMode:
             return
         if self.is_behaviour_active():
             return
-        self.playing_video = True
-        self.display.video = self.video_urls["dark_squint_dark.webm"]
+        self.display.video = self.server.url_for_video("dark_squint_dark.webm")
         if hasattr(self.display, "video_playing"):
             while self.display.video_playing:
                 time.sleep(0.05)
         else:
-            time.sleep(VIDEO_DURATIONS["dark_squint_dark.webm"])
+            time.sleep(7.0)
         if not self.is_behaviour_active():
             self.display.image = self.server.url_for_image("background_black.png")
-        self.playing_video = False
         self.next_state = time.time() + self.sleep.timeout
 
     def run(self):
@@ -286,12 +278,11 @@ class SleepMode:
 
         Priority order each iteration:
         1. Yield the display while any behaviour is active.
-        2. Yield while a transition video is playing.
-        3. Idle path:
+        2. Idle path:
             - Touch while dark → eyes_opening.
             - Inactive >= configured timeout → dark screen; spontaneous peeks.
             - Otherwise → open eyes (static PNG).
-        4. Non-idle path: restore open eyes and reset timer.
+        3. Non-idle path: restore open eyes and reset timer.
 
         Uses wake_event to avoid busy-waiting; timeout is 1 second.
         """
@@ -312,10 +303,6 @@ class SleepMode:
             if self.was_behaviour_active:
                 self.was_behaviour_active = False
                 self.current_state = None
-            if self.playing_video:
-                self.wake_event.wait(timeout=0.1)
-                self.wake_event.clear()
-                continue
             inactive_time = time.time() - self.sleep.last_activity
 
             if self.is_idle_mode():
