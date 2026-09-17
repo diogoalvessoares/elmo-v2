@@ -1023,6 +1023,39 @@ class Onboard(DBEntry):
     }
 
 
+class Activity(DBEntry):
+    """
+    Redis-backed state for the behaviour's current activity state.
+    """
+
+    prefix = "activity"
+    fields = {
+        "ready": False,
+        "blush": None,
+        "clock": None,
+        "conversation": None,
+        "finger_counter": None,
+        "hello": None,
+        "ouch": None,
+    }
+
+
+class Sleep(DBEntry):
+    """
+    Redis-backed state for the sleep_mode node.
+    """
+
+    prefix = "sleep"
+    fields = {
+        "enabled": True,
+        "sleeping": False,
+        "eye_state": 1,
+        "timeout": 300,
+        "last_activity": 0.0,
+        "last_interaction": None,
+    }
+
+
 class Speech(DBEntry):
     """
     Redis-backed state for the speech synthesis driver.
@@ -1060,7 +1093,11 @@ class Akinator(DBEntry):
     """
 
     prefix = "akinator"
-    fields = {"running": False, "guessed": False, "error": None}
+    fields = {
+        "running": False, 
+        "guessed": False, 
+        "error": None
+    }
 
 
 class Server(DBEntry):
