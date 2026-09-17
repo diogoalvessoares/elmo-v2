@@ -76,7 +76,7 @@ class SleepMode:
         self.server = mw.Server()
         self.mode_manager = ModeManager()
         self.sleep = mw.Sleep()
-        self.node = mw.Node()
+        self.node = mw.Node("sleep_mode")
         self.activity = mw.Activity()
 
         self.sleep.last_activity = time.time()
@@ -159,7 +159,7 @@ class SleepMode:
         -------
         bool
         """
-        return bool(self.activity.blush) or bool(self.activity.hello)
+        return self.activity.blush or self.activity.hello
 
     def set_image(self, url, state, eye_state):
         """
