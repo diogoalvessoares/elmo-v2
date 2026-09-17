@@ -154,74 +154,20 @@ class SleepMode:
         """
         return self.activity.blush or self.activity.hello
 
-    def set_image(self, url, state, eyes_open):
-        """
-        Show a static image and publish the new eye state.
-        Only updates the display and middleware state when
-        the state actually changes.
-
-        Parameters
-        ----------
-        url : str
-            Image URL to display.
-        state : str
-            New state label ("open" or "dark").
-        eyes_open : bool
-            Eye state to publish (True = open, False = closed).
-        """
-        if self.current_state != state:
-            self.display.image = url
-            self.current_state = state
-            self.sleep.eyes_open = eyes_open
-
-    def play_video(self, filename, fallback_duration, then_image_url=None, restore=True):
-        """
-        Play a transition video and wait for it to finish.
-
-        Uses fallback_duration as a fixed-time fallback since Onboard does not
-        always expose a video_playing flag.
-
-        Parameters
-        ----------
-        filename : str
-            Video filename (e.g. "dark_open.webm").
-        fallback_duration : float
-            Seconds to wait if the display can't report when playback ends.
-        then_image_url : str, optional
-            Static image URL to restore after playback. Defaults to normal.png.
-            Only used when restore=True.
-        restore : bool, optional
-            If True (default), sets a static image after the video ends.
-            Set to False when the video already ends on the correct frame —
-            forcing an image while the video is still playing would interrupt
-            it mid-frame and cause a visual double-play artifact.
-        """
-        self.display.video = self.server.url_for_video(filename)
-        if hasattr(self.display, "video_playing"):
-            while self.display.video_playing:
-                time.sleep(0.05)
-        else:
-            time.sleep(fallback_duration)
-        if restore:
-            self.display.image = (
-                then_image_url
-                if then_image_url is not None
-                else self.server.url_for_image("normal.png")
-            )
-
     def eyes_closing(self):
         """
         Transition from open eyes to fully dark screen.
 
-        Plays open_dark.webm for a smooth animation. restore=False because
-        the video already ends on the dark frame — forcing display.image
-        mid-playback would interrupt the video and cause a visual artifact.
-        Publishes eyes_open=False.
+        Plays open_dark.webm and waits for the browser to confirm playback
+        has ended. The video already ends on the dark frame so no image
+        restore is needed. Publishes eyes_open=False.
         No-op if already sleeping.
         """
         if self.sleep.sleeping:
             return
-        self.play_video("open_dark.webm", 2.0, restore=False)
+        self.display.video = self.server.url_for_video("open_dark.webm")
+        while self.display.video is not None:
+            time.sleep(0.05)
         self.sleep.sleeping = True
         self.current_state = "dark"
         self.sleep.eyes_open = False
@@ -230,12 +176,14 @@ class SleepMode:
         """
         Wake from dark to open eyes.
 
-        Plays dark_open.webm then restores the open static image.
-        Publishes eyes_open=True and resets the activity timer.
+        Plays dark_open.webm, waits for playback to finish, then restores
+        the open static image. Publishes eyes_open=True and resets the
+        activity timer.
         """
-        self.play_video(
-            "dark_open.webm", 2.0, then_image_url=self.server.url_for_image("normal.png")
-        )
+        self.display.video = self.server.url_for_video("dark_open.webm")
+        while self.display.video is not None:
+            time.sleep(0.05)
+        self.display.image = self.server.url_for_image("normal.png")
         self.sleep.sleeping = False
         self.current_state = "open"
         self.sleep.eyes_open = True
@@ -256,11 +204,8 @@ class SleepMode:
         if self.is_behaviour_active():
             return
         self.display.video = self.server.url_for_video("dark_squint_dark.webm")
-        if hasattr(self.display, "video_playing"):
-            while self.display.video_playing:
-                time.sleep(0.05)
-        else:
-            time.sleep(7.0)
+        while self.display.video is not None:
+            time.sleep(0.05)
         if not self.is_behaviour_active():
             self.display.image = self.server.url_for_image("background_black.png")
         self.next_state = time.time() + self.sleep.timeout
@@ -308,9 +253,10 @@ class SleepMode:
                     else:
                         self.eyes_look_around()
                 else:
-                    self.set_image(
-                        self.server.url_for_image("normal.png"), "open", True
-                    )
+                    if self.current_state != "open":
+                        self.display.image = self.server.url_for_image("normal.png")
+                        self.current_state = "open"
+                        self.sleep.eyes_open = True
             else:
                 if self.current_state != "open":
                     if self.sleep.sleeping:
