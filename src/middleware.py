@@ -1049,7 +1049,7 @@ class Sleep(DBEntry):
     fields = {
         "enabled": True,
         "sleeping": False,
-        "eye_state": 1,
+        "eyes_open": None,
         "timeout": 300,
         "last_activity": 0.0,
         "last_interaction": None,
