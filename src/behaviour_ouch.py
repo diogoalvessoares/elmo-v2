@@ -22,9 +22,6 @@ import time
 import middleware as mw
 
 
-OPEN_PNG = "open.png"
-OUCH_TEARS_OPEN_MP4 = "ouch_tears_open.mp4"
-VIDEO_DURATION = 5.5
 COOLDOWN = 2.0
 
 
@@ -68,25 +65,7 @@ class BehaviourOuch:
         self.behaviours = mw.Behaviours()
         self.server= mw.Server()
         self.node = mw.Node("behaviour_ouch")
-        self.url_open  = self.server.url_for_image(OPEN_PNG)
-        self.video_url = self.server.url_for_video(OUCH_TEARS_OPEN_MP4)
-
-    def set_key(self, key, value):
-        """
-        Set a Redis key via middleware.
-
-        Parameters
-        ----------
-        key : str
-            Redis key name.
-        value : any
-            Value to store (serialised to JSON before writing).
-
-        Returns
-        -------
-        None
-        """
-        mw.connection.set(key, mw.json.dumps(value))
+        self.activity = mw.Activity()
 
     def is_touch_detected(self):
         """
@@ -126,14 +105,13 @@ class BehaviourOuch:
         -------
         None
         """
-        self.set_key("behaviour_ouch_active", True)
-        self.node.loginfo("ouch")
-        self.onboard.video = self.video_url
-        time.sleep(VIDEO_DURATION)
+        self.node.loginfo("ouching")
+        self.activity.ouch = True
+        self.onboard.video = self.server.url_for_image("normal.png")
+        time.sleep(5.5)
         self.onboard.video = None
-        self.onboard.image = self.url_open
-        self.set_key("sleep_mode_last_interaction", time.time())
-        self.set_key("behaviour_ouch_active", False)
+        self.onboard.image = self.server.url_for_video("ouch_tears_open.mp4")
+        self.activity.ouch = False
 
     def run(self):
         """
