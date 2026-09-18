@@ -5,7 +5,7 @@ Tool node.
 Controls the robot sleep mode state machine and onboard eye transitions.
 
 When there is no user interaction for a configurable amount of time,
-the node transitions the onboard display through open, squint and dark
+the node transitions the onboard display through open and dark
 states while coordinating with behaviour nodes that may temporarily own
 the display.
 
@@ -18,37 +18,6 @@ from mode_manager import ModeManager
 import middleware as mw
 
 
-EYE_OPEN = 1
-EYE_SQUINT = 2
-EYE_DARK = 3
-
-FIRST_TIMEOUT = 120
-SECOND_TIMEOUT = 180
-#FIRST_TIMEOUT = 10
-#SECOND_TIMEOUT = 10
-
-DARK_PEEK_MIN = 30
-DARK_PEEK_MAX = 120
-
-OPEN_PNG = "open.png"
-SQUINT_PNG = "thinking.png"
-BACKGROUND_BLACK_PNG = "background_black.png"
-
-OPEN_SQUINT_MP4 = "open_squint.mp4"
-SQUINT_DARK_MP4 = "squint_dark.mp4"
-SQUINT_OPEN_MP4 = "squint_open.mp4"
-DARK_OPEN_MP4 = "dark_open.mp4"
-DARK_SQUINT_DARK_MP4 = "dark_squint_dark.mp4"
-
-VIDEO_DURATIONS = {
-    "OPEN_SQUINT_MP4": 1.6,
-    "SQUINT_DARK_MP4": 2.0,
-    "SQUINT_OPEN_MP4": 1.6,
-    "DARK_OPEN_MP4": 2.0,
-    "DARK_SQUINT_DARK_MP4": 7.0,
-}
-
-
 class SleepMode:
     """
     Manages the onboard display sleep transitions based on inactivity.
@@ -56,15 +25,12 @@ class SleepMode:
     Owns the onboard display during idle mode. Yields it to behaviours
     when they raise their active flag, and resumes when the flag clears.
 
-    Publishes sleep_mode_eye_state (EYE_OPEN=1, EYE_SQUINT=2, EYE_DARK=3)
-    to Redis so behaviours can choose the correct transition animation
-    without any dependency on sleep_mode internals.
+    Behaviours read mw.Sleep().sleeping to choose the correct transition
+    animation (False = eyes open, True = eyes closed).
 
     > ## Attributes
 
     ``touch : mw.TouchSensors`` : Middleware touch sensor state.
-
-    ``gpio : mw.GPIO`` : Middleware GPIO state.
 
     ``display : mw.Onboard`` : Middleware onboard display controller.
 
@@ -72,71 +38,46 @@ class SleepMode:
 
     ``mode_manager : ModeManager`` : Mode manager used to determine idle and active states.
 
-    ``url_open : str`` : Pre-resolved URL for the open eyes image.
+    ``sleep : mw.Sleep`` : Middleware sleep state (enabled, sleeping, timeout,
+    last_activity, last_interaction).
 
-    ``url_squint : str`` : Pre-resolved URL for the squint eyes image.
+    ``node : mw.Node`` : Middleware node helper, used for logging.
 
-    ``url_dark : str`` : Pre-resolved URL for the dark background image.
-
-    ``video_urls : dict`` : Mapping between transition identifiers and video URLs.
-
-    ``last_activity : float`` : Timestamp of the latest detected interaction.
-
-    ``current_state : str | None`` : Current eye state label.
+    ``activity : mw.Activity`` : Middleware activity state, used to detect behaviours
+    that have temporarily taken ownership of the display.
 
     ``last_idle_state : bool | None`` : Last detected idle state.
 
-    ``playing_video : bool`` : True while a transition video is active.
+    ``was_behaviour_active : bool`` : Whether a behaviour owned the display on the
+    previous iteration, used to force a display refresh once it releases.
 
     ``wake_event : threading.Event`` : Synchronisation event used to wake the main loop.
 
-    ``next_peek_time : float`` : Timestamp for the next dark-mode peek animation.
+    ``next_state : float`` : Timestamp for the next dark-mode peek animation.
 
     > ## Functions
     """
 
     def __init__(self):
         """
-        Initialise middleware objects, pre-resolve URLs, and start monitor threads.
+        Initialise middleware objects and start monitor threads.
         """
         self.touch = mw.TouchSensors()
-        self.gpio = mw.GPIO()
         self.display = mw.Onboard()
         self.server = mw.Server()
         self.mode_manager = ModeManager()
+        self.sleep = mw.Sleep()
+        self.node = mw.Node("sleep_mode")
+        self.activity = mw.Activity()
 
-        self.url_open = self.server.url_for_image(OPEN_PNG)
-        self.url_squint = self.server.url_for_image(SQUINT_PNG)
-        self.url_dark = self.server.url_for_image(BACKGROUND_BLACK_PNG)
-        self.video_urls = {
-            key: self.server.url_for_video(globals()[key])
-            for key in VIDEO_DURATIONS
-        }
-
-        self.last_activity = time.time()
-        self.current_state = None
+        self.sleep.last_activity = time.time()
         self.last_idle_state = None
-        self.playing_video = False
+        self.was_behaviour_active = False
+        self.next_state = time.time() + self.sleep.timeout
         self.wake_event = Event()
 
-        # Thread to monitor touch
-        self.set_key("sleep_mode_eye_state", EYE_OPEN)
         Thread(target=self.monitor_touch, daemon=True).start()
-        # Thread to monitor modes
         Thread(target=self.monitor_mode, daemon=True).start()
-
-    def set_key(self, key, value):
-        """
-        Set a Redis key via middleware.
-
-        Parameters
-        ----------
-        key : str
-            Redis key name.
-        value : any
-            Value to store.
-        """
-        mw.connection.set(key, mw.json.dumps(value))
 
     def monitor_touch(self):
         """
@@ -145,14 +86,14 @@ class SleepMode:
 
         Only chest touches are handled here. Head touches are exclusively
         used by behaviour_blush — reacting to them here would cause
-        sleep_mode to call wake_to_open() at the same time blush fires,
+        sleep_mode to call eyes_opening() at the same time blush fires,
         creating a display race condition.
         """
         last_touch = False
         while True:
             touched = self.touch.touch_chest
             if touched and not last_touch:
-                self.last_activity = time.time()
+                self.sleep.last_activity = time.time()
                 self.wake_event.set()
             last_touch = touched
             time.sleep(0.1)
@@ -162,45 +103,27 @@ class SleepMode:
         Background thread: resets the activity timer on idle/non-idle
         transitions caused by other behaviours becoming active or inactive,
         and when a behaviour explicitly signals interaction via
-        sleep_mode_last_interaction.
+        mw.Sleep().last_interaction.
         """
         last_interaction = 0.0
         while True:
-            idle = not (
-                self.mode_manager.behaviours.conversation
-                or self.mode_manager.behaviours.photographer
-                or self.mode_manager.behaviours.akinator
-                or self.mode_manager.behaviours.wifi_connect
-                )
+            idle = self.is_idle_mode()
             if idle != self.last_idle_state:
                 self.last_idle_state = idle
-                self.last_activity = time.time()
+                self.sleep.last_activity = time.time()
                 self.wake_event.set()
-            if mw.has_key("sleep_mode_last_interaction"):
-                t = mw.get_key("sleep_mode_last_interaction")
-                if t and float(t) > last_interaction:
-                    last_interaction = float(t)
-                    self.last_activity = last_interaction
+            try:
+                t = self.sleep.last_interaction
+                if t > last_interaction:
+                    last_interaction = t
+                    self.sleep.last_activity = t
                     self.wake_event.set()
+            except TypeError:
+                self.node.logwarn(
+                    "monitor_mode: sleep.last_interaction is not comparable (%r), skipping"
+                    % (self.sleep.last_interaction,)
+                )
             time.sleep(0.2)
-
-    def get_flag(self, key):
-        """
-        Safely read a boolean Redis flag via middleware.
-
-        Parameters
-        ----------
-        key : str
-            Redis key name.
-
-        Returns
-        -------
-        bool
-            True if the key exists and is truthy, False otherwise.
-        """
-        if not mw.has_key(key):
-            return False
-        return bool(mw.get_key(key))
 
     def is_idle_mode(self):
         """
@@ -212,149 +135,64 @@ class SleepMode:
             True if no active non-idle behaviour is running.
         """
         b = self.mode_manager.behaviours
-        return not (b.conversation or b.photographer or b.akinator or b.wifi_connect)
-
-    def is_behaviour_active(self):
-        """
-        Check whether any behaviour currently owns the display.
-
-        Returns
-        -------
-        bool
-        """
-        return (
-            self.get_flag("behaviour_blush_active")
-            or self.get_flag("behaviour_hello_active")
+        return not (
+            b.conversation or
+            b.photographer or
+            b.akinator or
+            b.wifi_connect
         )
 
-    def set_image(self, url, state, eye_state):
+    def eyes_closing(self):
         """
-        Show a static image and publish the new eye state semaphore.
+        Transition from open eyes to fully dark screen.
 
-        Only writes to the display and Redis when state actually changes.
-
-        Parameters
-        ----------
-        url : str
-            Image URL to display.
-        state : str
-            New state label ("open", "squint", or "dark").
-        eye_state : int
-            Semaphore value to publish (EYE_OPEN, EYE_SQUINT, or EYE_DARK).
+        Plays open_dark.webm and waits for the browser to confirm playback
+        has ended. The video already ends on the dark frame so no image
+        restore is needed. Publishes sleeping=True.
+        No-op if already sleeping.
         """
-        if self.current_state != state:
-            self.display.image = url
-            self.current_state = state
-            self.set_key("sleep_mode_eye_state", eye_state)
-
-    def play_video(self, video_key, then_image_url=None, restore=True):
-        """
-        Play a transition video and wait for it to finish.
-
-        Uses known clip duration as timing fallback since Onboard does not
-        expose a video_playing flag.
-
-        Parameters
-        ----------
-        video_key : str
-            Key into VIDEO_DURATIONS (e.g. "SQUINT_OPEN_MP4").
-        then_image_url : str, optional
-            Static image URL to restore after playback. Defaults to open.png.
-            Only used when restore=True.
-        restore : bool, optional
-            If True (default), sets a static image after the video ends.
-            Set to False when the video already ends on the correct frame —
-            forcing an image while the video is still playing would interrupt
-            it mid-frame and cause a visual double-play artifact.
-        """
-        self.playing_video = True
-        url = self.video_urls.get(video_key)
-        if url:
-            self.display.video = url
-            if hasattr(self.display, "video_playing"):
-                while self.display.video_playing:
-                    time.sleep(0.05)
-            else:
-                time.sleep(VIDEO_DURATIONS.get(video_key, 3.0))
-        if restore:
-            restore_url = then_image_url if then_image_url is not None else self.url_open
-            self.display.image = restore_url
-        self.playing_video = False
-
-    def transition_to_squint(self):
-        """
-        Transition from open eyes to squinted/sleepy eyes.
-
-        Plays open_squint.mp4 for a smooth animation. restore=False because
-        the video already ends on the squint frame — forcing display.image
-        mid-playback would interrupt the video and cause a visual artifact.
-        Publishes EYE_SQUINT to the semaphore.
-        No-op if already in squint state.
-        """
-        if self.current_state == "squint":
+        if self.sleep.sleeping:
             return
-        self.play_video("OPEN_SQUINT_MP4", restore=False)
-        self.current_state = "squint"
-        self.set_key("sleep_mode_eye_state", EYE_SQUINT)
+        self.display.video = self.server.url_for_video("open_dark.webm")
+        while self.display.video is not None:
+            time.sleep(0.05)
+        self.sleep.sleeping = True
 
-    def transition_to_dark(self):
+    def eyes_opening(self):
         """
-        Transition from squint eyes to fully dark screen.
+        Wake from dark to open eyes.
 
-        Plays squint_dark.mp4 for a smooth animation. restore=False because
-        the video already ends on the dark frame — forcing display.image
-        mid-playback would interrupt the video and cause a visual artifact.
-        Publishes EYE_DARK to the semaphore.
-        No-op if already in dark state.
+        Plays dark_open.webm, waits for playback to finish, then restores
+        the open static image. Publishes sleeping=False and resets the
+        activity timer.
         """
-        if self.current_state == "dark":
-            return
-        self.play_video("SQUINT_DARK_MP4", restore=False)
-        self.current_state = "dark"
-        self.set_key("sleep_mode_eye_state", EYE_DARK)
+        self.display.video = self.server.url_for_video("dark_open.webm")
+        while self.display.video is not None:
+            time.sleep(0.05)
+        self.display.image = self.server.url_for_image("normal.png")
+        self.sleep.sleeping = False
+        self.sleep.last_activity = time.time()
 
-    def wake_to_open(self):
+    def eyes_look_around(self):
         """
-        Wake from squint or dark to open eyes.
-
-        Plays the correct transition video based on the current display state:
-        - squint → squint_open.mp4 (eyelids open gradually)
-        - dark   → dark_open.mp4  (direct black-to-open, no squint intermediate)
-
-        Publishes EYE_OPEN and resets the activity timer.
-        """
-        if self.current_state == "dark":
-            self.play_video("DARK_OPEN_MP4", then_image_url=self.url_open)
-        else:
-            self.play_video("SQUINT_OPEN_MP4", then_image_url=self.url_open)
-        self.current_state = "open"
-        self.set_key("sleep_mode_eye_state", EYE_OPEN)
-        self.last_activity = time.time()
-
-    def looking_around(self):
-        """
-        While in the dark state, play a spontaneous squint-peek animation at
-        a 5 minute interval, then return to the dark static image.
+        While in the dark state, play a spontaneous peek animation
+        at the configured sleep interval, then return to the dark
+        static image.
 
         Does nothing if a behaviour owns the display, or if it is too soon.
         If a behaviour becomes active mid-playback, the dark restore is skipped
         so it does not clobber the behaviour's animation.
         """
-        if time.time() < self.next_peek_time:
+        if time.time() < self.next_state:
             return
-        if self.is_behaviour_active():
+        if self.activity.blush or self.activity.hello:
             return
-        self.playing_video = True
-        self.display.video = self.video_urls["DARK_SQUINT_DARK_MP4"]
-        if hasattr(self.display, "video_playing"):
-            while self.display.video_playing:
-                time.sleep(0.05)
-        else:
-            time.sleep(VIDEO_DURATIONS["DARK_SQUINT_DARK_MP4"])
-        if not self.is_behaviour_active():
-            self.display.image = self.url_dark
-        self.playing_video = False
-        self.next_peek_time = time.time() + 300
+        self.display.video = self.server.url_for_video("dark_squint_dark.webm")
+        while self.display.video is not None:
+            time.sleep(0.05)
+        if not (self.activity.blush or self.activity.hello):
+            self.display.image = self.server.url_for_image("background_black.png")
+        self.next_state = time.time() + self.sleep.timeout
 
     def run(self):
         """
@@ -362,52 +200,53 @@ class SleepMode:
 
         Priority order each iteration:
         1. Yield the display while any behaviour is active.
-        2. Yield while a transition video is playing.
-        3. Idle path:
-            - Touch while asleep  → wake_to_open (plays squint_open).
-            - Inactive >= 5 min   → dark screen; spontaneous peeks.
-            - Inactive >= 2 min   → squinted eyes (static PNG).
-            - Otherwise           → open eyes (static PNG).
-        4. Non-idle path: restore open eyes and reset timer.
+        2. Idle path:
+            - Touch while dark → eyes_opening.
+            - Inactive >= configured timeout → dark screen; spontaneous peeks.
+            - Otherwise → open eyes (static PNG).
+        3. Non-idle path: restore open eyes and reset timer.
 
         Uses wake_event to avoid busy-waiting; timeout is 1 second.
         """
         while True:
-            # yield display to any behaviour that has taken over
-            if self.is_behaviour_active():
+            behaviour_active = self.activity.blush or self.activity.hello
+            if not self.sleep.enabled:
+                if self.sleep.sleeping:
+                    self.eyes_opening()
+                self.wake_event.wait(timeout=1.0)
+                self.wake_event.clear()
+                continue
+            if behaviour_active:
+                self.was_behaviour_active = True
                 self.wake_event.wait(timeout=0.1)
                 self.wake_event.clear()
                 continue
-            if self.playing_video:
-                self.wake_event.wait(timeout=0.1)
-                self.wake_event.clear()
-                continue
-            inactive_time = time.time() - self.last_activity
-
+            if self.was_behaviour_active:
+                self.was_behaviour_active = False
+                self.display.image = self.server.url_for_image("normal.png")
+            inactive_time = time.time() - self.sleep.last_activity
             if self.is_idle_mode():
-                chest_touched = self.touch.touch_chest
-                if chest_touched and self.current_state in ("squint", "dark"):
-                    self.wake_to_open()
-                elif inactive_time >= FIRST_TIMEOUT + SECOND_TIMEOUT:
-                    if self.current_state != "dark":
-                        self.transition_to_dark()
-                        self.next_peek_time = time.time() + 300
+                touched = self.touch.touch_chest
+                if touched and self.sleep.sleeping:
+                    self.eyes_opening()
+                elif inactive_time >= self.sleep.timeout:
+                    if not self.sleep.sleeping:
+                        self.eyes_closing()
+                        self.next_state = time.time() + self.sleep.timeout
                     else:
-                        self.looking_around()
-                elif inactive_time >= FIRST_TIMEOUT:
-                    self.transition_to_squint()
+                        self.eyes_look_around()
                 else:
-                    self.set_image(self.url_open, "open", EYE_OPEN)
-            else:
-                # if its not idle, resets the timer and shows open eyes
-                if self.current_state != "open":
-                    if self.current_state in ("squint", "dark"):
-                        self.wake_to_open()
+                    if self.sleep.sleeping:
+                        self.display.image = self.server.url_for_image("normal.png")
+                        self.sleep.sleeping = False
                     else:
-                        self.display.image = self.url_open
-                        self.current_state = "open"
-                        self.set_key("sleep_mode_eye_state", EYE_OPEN)
-                    self.last_activity = time.time()
+                        self.display.image = self.server.url_for_image("normal.png")
+            else:
+                if self.sleep.sleeping:
+                    self.eyes_opening()
+                else:
+                    self.display.image = self.server.url_for_image("normal.png")
+                self.sleep.last_activity = time.time()
 
             self.wake_event.wait(timeout=1.0)
             self.wake_event.clear()
