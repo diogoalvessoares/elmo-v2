@@ -25,6 +25,9 @@ class SleepMode:
     Owns the onboard display during idle mode. Yields it to behaviours
     when they raise their active flag, and resumes when the flag clears.
 
+    Behaviours read mw.Sleep().sleeping to choose the correct transition
+    animation (False = eyes open, True = eyes closed).
+
     > ## Attributes
 
     ``touch : mw.TouchSensors`` : Middleware touch sensor state.
@@ -46,7 +49,7 @@ class SleepMode:
     ``last_idle_state : bool | None`` : Last detected idle state.
 
     ``was_behaviour_active : bool`` : Whether a behaviour owned the display on the
-    previous iteration, used to force a redraw once it releases the display.
+    previous iteration, used to force a display refresh once it releases.
 
     ``wake_event : threading.Event`` : Synchronisation event used to wake the main loop.
 
@@ -136,16 +139,6 @@ class SleepMode:
             b.wifi_connect
         )
 
-    def is_behaviour_active(self):
-        """
-        Check whether any behaviour currently owns the display.
-
-        Returns
-        -------
-        bool
-        """
-        return self.activity.blush or self.activity.hello
-
     def eyes_closing(self):
         """
         Transition from open eyes to fully dark screen.
@@ -189,12 +182,12 @@ class SleepMode:
         """
         if time.time() < self.next_state:
             return
-        if self.is_behaviour_active():
+        if self.activity.blush or self.activity.hello:
             return
         self.display.video = self.server.url_for_video("dark_squint_dark.webm")
         while self.display.video is not None:
             time.sleep(0.05)
-        if not self.is_behaviour_active():
+        if not (self.activity.blush or self.activity.hello):
             self.display.image = self.server.url_for_image("background_black.png")
         self.next_state = time.time() + self.sleep.timeout
 
@@ -213,7 +206,7 @@ class SleepMode:
         Uses wake_event to avoid busy-waiting; timeout is 1 second.
         """
         while True:
-            behaviour_active = self.is_behaviour_active()
+            behaviour_active = self.activity.blush or self.activity.hello
             if not self.sleep.enabled:
                 if self.sleep.sleeping:
                     self.eyes_opening()
@@ -227,6 +220,7 @@ class SleepMode:
                 continue
             if self.was_behaviour_active:
                 self.was_behaviour_active = False
+                self.display.image = self.server.url_for_image("normal.png")
             inactive_time = time.time() - self.sleep.last_activity
 
             if self.is_idle_mode():
@@ -243,6 +237,8 @@ class SleepMode:
                     if self.sleep.sleeping:
                         self.display.image = self.server.url_for_image("normal.png")
                         self.sleep.sleeping = False
+                    else:
+                        self.display.image = self.server.url_for_image("normal.png")
             else:
                 if self.sleep.sleeping:
                     self.eyes_opening()
