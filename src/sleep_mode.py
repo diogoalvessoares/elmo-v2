@@ -119,7 +119,10 @@ class SleepMode:
                     self.sleep.last_activity = t
                     self.wake_event.set()
             except TypeError:
-                pass
+                self.node.logwarn(
+                    "monitor_mode: sleep.last_interaction is not comparable (%r), skipping"
+                    % (self.sleep.last_interaction,)
+                )
             time.sleep(0.2)
 
     def is_idle_mode(self):
@@ -222,7 +225,6 @@ class SleepMode:
                 self.was_behaviour_active = False
                 self.display.image = self.server.url_for_image("normal.png")
             inactive_time = time.time() - self.sleep.last_activity
-
             if self.is_idle_mode():
                 touched = self.touch.touch_chest
                 if touched and self.sleep.sleeping:
