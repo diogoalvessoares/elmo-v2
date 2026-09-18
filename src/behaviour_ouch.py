@@ -66,6 +66,7 @@ class BehaviourOuch:
         self.server= mw.Server()
         self.node = mw.Node("behaviour_ouch")
         self.activity = mw.Activity()
+        self.sleep = mw.Sleep()
 
     def is_touch_detected(self):
         """
@@ -112,6 +113,7 @@ class BehaviourOuch:
         self.onboard.video = None
         self.onboard.image = self.server.url_for_video("ouch_tears_open.mp4")
         self.activity.ouch = False
+        self.sleep.last_interaction = time.time()
 
     def run(self):
         """
@@ -150,7 +152,7 @@ class BehaviourOuch:
                     self.ouch()
                     last_ouch = time.time()
         finally:
-            self.set_key("behaviour_ouch_active", False)
+            self.activity.ouch = False
             self.node.shutdown()
 
 
