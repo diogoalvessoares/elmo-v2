@@ -68,7 +68,6 @@ class SleepMode:
         self.activity = mw.Activity()
 
         self.sleep.last_activity = time.time()
-        self.sleep.sleeping = False
         self.last_idle_state = None
         self.was_behaviour_active = False
         self.next_state = time.time() + self.sleep.timeout
