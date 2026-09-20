@@ -63,31 +63,10 @@ class BehaviourOuch:
         """
         self.onboard = mw.Onboard()
         self.behaviours = mw.Behaviours()
-        self.server= mw.Server()
+        self.server = mw.Server()
         self.node = mw.Node("behaviour_ouch")
         self.activity = mw.Activity()
         self.sleep = mw.Sleep()
-
-    def is_touch_detected(self):
-        """
-        Check and consume a pending touch event from Redis.
-
-        Reads onboard.touch; if True, immediately resets it to False so the
-        event is not re-processed on the next tick.
-
-        Parameters
-        ----------
-        None
-
-        Returns
-        -------
-        bool
-            True if a touch event was pending, False otherwise.
-        """
-        touched = bool(self.onboard.touch)
-        if touched:
-            self.onboard.touch = False
-        return touched
 
     def ouch(self):
         """
@@ -148,7 +127,8 @@ class BehaviourOuch:
                 if time.time() - last_ouch < COOLDOWN:
                     self.onboard.touch = False
                     continue
-                if self.is_touch_detected():
+                if self.onboard.touch:
+                    self.onboard.touch = False
                     self.ouch()
                     last_ouch = time.time()
         finally:
