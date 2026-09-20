@@ -325,9 +325,6 @@ class BehaviourClock:
                     continue
                 if not self.touch_sensors.touch_chest:
                     continue
-
-                if self.is_blush_active():
-                    continue
                 img_black = self.leds.create_canvas()
                 clock_img = self.show_clock()
                 weather_img = self.show_weather()
