@@ -8,12 +8,13 @@ Only runs when behaviours.clock is True (set by the mode manager in idle mode).
 
 """
 
+
 import time
 from datetime import datetime
-import middleware as mw
 import requests
 
-CITY = None
+
+import middleware as mw
 
 
 class BehaviourClock:
@@ -47,11 +48,10 @@ class BehaviourClock:
         self.touch_sensors = mw.TouchSensors()
         self.behaviours = mw.Behaviours()
         self.battery = mw.Battery()
+        self.activity = mw.Activity()
+        self.city = self.get_city()
 
-        global CITY
-        CITY = self.get_city()
-
-    def get_key(self, key):
+    def get_city(self):
         """
         Safely retrieve a Redis key via middleware.
 
@@ -62,25 +62,22 @@ class BehaviourClock:
 
         Returns
         -------
-        any
-            Parsed value, or False if key does not exist.
+        str
+            City name used for weather queries.
         """
-        if not mw.has_key(key):
-            return False
-        return mw.get_key(key)
-
-    def set_key(self, key, value):
-        """
-        Set a Redis key via middleware.
-
-        Parameters
-        ----------
-        key : str
-            Redis key name.
-        value : any
-            Value to store.
-        """
-        mw.set_key(key, value)
+        try:
+            return mw.get_key("city")
+        except (TypeError, ValueError):
+            tz_map = {
+                "GMT": "Lisbon",
+                "WET": "Lisbon",
+                "CET": "Paris",
+                "EST": "New York",
+                "EDT": "New York",
+                "PST": "Los Angeles",
+                "PDT": "Los Angeles",
+            }
+            return tz_map.get(time.tzname[0], "Lisbon")
 
     def is_blush_active(self):
         """
@@ -91,41 +88,10 @@ class BehaviourClock:
         bool
             True if blush is active and LEDs are reserved.
         """
-        return bool(self.get_key("behaviour_blush_active"))
-
-    def detect_city_by_timezone(self):
-        """
-        Infer city from the system timezone name.
-
-        Returns
-        -------
-        str
-            City name, defaulting to "Lisbon" if timezone is unknown.
-        """
-        tz = time.tzname[0]
-        tz_map = {
-            "GMT": "Lisbon",
-            "WET": "Lisbon",
-            "CET": "Paris",
-            "EST": "New York",
-            "EDT": "New York",
-            "PST": "Los Angeles",
-            "PDT": "Los Angeles",
-        }
-        return tz_map.get(tz, "Lisbon")
-
-    def get_city(self):
-        """
-        Retrieve city from Redis or fall back to timezone detection.
-
-        Returns
-        -------
-        str
-            City name used for weather queries.
-        """
-        if mw.has_key("city"):
-            return mw.get_key("city")
-        return self.detect_city_by_timezone()
+        try:
+            return bool(self.activity.blush)
+        except (TypeError, ValueError):
+            return False
 
     def is_night(self):
         """
@@ -184,7 +150,7 @@ class BehaviourClock:
         tuple[int, str]
             Temperature in Celsius and weather icon key string.
         """
-        url = f"https://wttr.in/{CITY}?format=j1"
+        url = f"https://wttr.in/{self.city}?format=j1"
         try:
             data = requests.get(url, timeout=5).json()
             now_hour = datetime.now().hour
@@ -396,7 +362,7 @@ class BehaviourClock:
         """
         self.node.loginfo("behaviour start")
         try:
-            while not self.get_key(self.node.name + "is_shutdown"):
+            while not self.node.is_shutdown():
                 time.sleep(0.1)
                 if self.is_blush_active():
                     continue
