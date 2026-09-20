@@ -78,20 +78,6 @@ class BehaviourClock:
             }
             return tz_map.get(time.tzname[0], "Lisbon")
 
-    def is_blush_active(self):
-        """
-        Check whether the blush behaviour is currently active.
-
-        Returns
-        -------
-        bool
-            True if blush is active and LEDs are reserved.
-        """
-        try:
-            return bool(self.activity.blush)
-        except (TypeError, ValueError):
-            return False
-
     def get_night(self):
         """
         Determine whether it is currently night time.
@@ -290,13 +276,13 @@ class BehaviourClock:
         bool
             True if the fade completed, False if interrupted by blush.
         """
-        if self.is_blush_active():
+        if self.activity.blush:
             self.leds.clear()
             return False
         self.leds.load_from_image(img_from)
         self.leds.request_fade(img_to, steps=steps, duration=duration)
         while self.leds.fade_active:
-            if self.is_blush_active():
+            if self.activity.blush:
                 self.leds.fade_active = False
                 self.leds.clear()
                 return False
@@ -319,7 +305,7 @@ class BehaviourClock:
         try:
             while not self.node.is_shutdown():
                 time.sleep(0.1)
-                if self.is_blush_active():
+                if self.activity.blush:
                     continue
                 if not self.behaviours.clock:
                     continue
@@ -344,7 +330,7 @@ class BehaviourClock:
                 last_pct = max(0, min(100, int(self.battery.percentage)))
                 hold_end = time.time() + 1.5
                 while time.time() < hold_end:
-                    if self.is_blush_active():
+                    if self.activity.blush:
                         self.leds.clear()
                         break
                     current_pct = max(0, min(100, int(self.battery.percentage)))
