@@ -303,52 +303,6 @@ class BehaviourClock:
             time.sleep(0.05)
         return True
 
-    def sequence(self):
-        """
-        Display sequence: clock, weather and battery.
-
-        Behavior
-        --------
-        - Fades in the clock image, holds for 1.5 seconds, fades out.
-        - Fades in the weather image, holds for 1.5 seconds, fades out.
-        - Fades in the battery image, holds for 1.5 seconds with live percentage
-          updates every 100ms, fades out.
-        - Aborts at any step if blush becomes active.
-        """
-        if self.is_blush_active():
-            return
-        img_black = self.leds.create_canvas()
-        clock_img = self.show_clock()
-        weather_img = self.show_weather()
-        if not self.fade_images(img_black, clock_img, steps=15, duration=1):
-            return
-        time.sleep(1.5)
-        if not self.fade_images(clock_img, img_black, steps=15, duration=1):
-            return
-        if not self.fade_images(img_black, weather_img, steps=20, duration=1):
-            return
-        time.sleep(1.5)
-        if not self.fade_images(weather_img, img_black, steps=20, duration=1):
-            return
-        battery_img = self.show_battery()
-        if not self.fade_images(img_black, battery_img, steps=15, duration=1):
-            return
-        last_pct = max(0, min(100, int(self.battery.percentage)))
-        hold_end = time.time() + 1.5
-        while time.time() < hold_end:
-            if self.is_blush_active():
-                self.leds.clear()
-                return
-            current_pct = max(0, min(100, int(self.battery.percentage)))
-            if current_pct != last_pct:
-                battery_img = self.show_battery()
-                self.leds.load_from_image(battery_img)
-                last_pct = current_pct
-            time.sleep(0.1)
-        if not self.fade_images(battery_img, img_black, steps=15, duration=1):
-            return
-        self.leds.clear()
-
     def run(self):
         """
         Main behaviour loop.
@@ -369,8 +323,42 @@ class BehaviourClock:
                     continue
                 if not self.behaviours.clock:
                     continue
-                if self.touch_sensors.touch_chest:
-                    self.sequence()
+                if not self.touch_sensors.touch_chest:
+                    continue
+
+                if self.is_blush_active():
+                    continue
+                img_black = self.leds.create_canvas()
+                clock_img = self.show_clock()
+                weather_img = self.show_weather()
+                if not self.fade_images(img_black, clock_img, steps=15, duration=1):
+                    continue
+                time.sleep(1.5)
+                if not self.fade_images(clock_img, img_black, steps=15, duration=1):
+                    continue
+                if not self.fade_images(img_black, weather_img, steps=20, duration=1):
+                    continue
+                time.sleep(1.5)
+                if not self.fade_images(weather_img, img_black, steps=20, duration=1):
+                    continue
+                battery_img = self.show_battery()
+                if not self.fade_images(img_black, battery_img, steps=15, duration=1):
+                    continue
+                last_pct = max(0, min(100, int(self.battery.percentage)))
+                hold_end = time.time() + 1.5
+                while time.time() < hold_end:
+                    if self.is_blush_active():
+                        self.leds.clear()
+                        break
+                    current_pct = max(0, min(100, int(self.battery.percentage)))
+                    if current_pct != last_pct:
+                        battery_img = self.show_battery()
+                        self.leds.load_from_image(battery_img)
+                        last_pct = current_pct
+                    time.sleep(0.1)
+                else:
+                    self.fade_images(battery_img, img_black, steps=15, duration=1)
+                    self.leds.clear()
         finally:
             self.leds.clear()
             self.node.shutdown()
