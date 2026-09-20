@@ -9,10 +9,6 @@ Touch detection is handled via the browser (touchstart event in main.js)
 which POSTs to /api/touch, setting onboard.touch = True in Redis.
 This node reads that flag and resets it after detection.
 
-The single video ouch_tears_open.mp4 is used regardless of the current
-eye state — sleep_mode yields the display while behaviour_ouch_active
-is True.
-
 Only runs when behaviours.ouch is True (set by the mode manager in idle mode).
 
 """
@@ -30,7 +26,6 @@ class BehaviourOuch:
     Middleware behaviour that triggers an ouch/tears animation on screen touch.
 
     Reads onboard.touch from Redis (set by /api/touch via main.js touchstart).
-    sleep_mode yields the display while behaviour_ouch_active is True.
 
     > ## Attributes
 
@@ -42,9 +37,9 @@ class BehaviourOuch:
 
     ``node : mw.Node`` : Middleware node used for shutdown and logging.
 
-    ``url_open : str`` : Pre-resolved URL for the open eyes static image.
+    ``activity : mw.Activity`` : Middleware activity state used to signal display ownership.
 
-    ``video_url : str`` : Pre-resolved URL for the ouch_tears_open animation video.
+    ``sleep : mw.Sleep`` : Middleware sleep state used to signal interaction.
 
     > ## Functions
     """
@@ -72,9 +67,9 @@ class BehaviourOuch:
         """
         Execute the full ouch animation sequence.
 
-        Sets behaviour_ouch_active so that sleep_mode yields the display,
+        Sets activity.ouch so that sleep_mode yields the display,
         plays ouch_tears_open.mp4, waits for the video to finish, then
-        restores open.png and signals sleep_mode to reset its inactivity
+        restores normal.png and signals sleep_mode to reset its inactivity
         timer before clearing the active flag.
 
         Parameters
@@ -102,11 +97,10 @@ class BehaviourOuch:
         - Clears any pending touch and skips if behaviours.ouch is False.
         - Clears any pending touch and skips if the COOLDOWN period has not
           elapsed since the last ouch animation.
-        - Calls ouch() when a touch event is detected, then records the
+        - Triggers ouch() when a touch event is detected, then records the
           timestamp for cooldown enforcement.
 
-        Clears behaviour_ouch_active and shuts down the middleware node on
-        exit (including on KeyboardInterrupt or any other exception).
+        Clears activity.ouch and shuts down the middleware node on exit.
 
         Parameters
         ----------
