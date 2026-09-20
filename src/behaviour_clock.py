@@ -35,6 +35,10 @@ class BehaviourClock:
 
     ``battery : mw.Battery`` : Middleware battery state used to read charge percentage.
 
+    ``activity : mw.Activity`` : Middleware activity state used to check if blush is active.
+
+    ``city : str`` : City name used for weather queries.
+
     > ## Functions
     """
 
@@ -53,12 +57,7 @@ class BehaviourClock:
 
     def get_city(self):
         """
-        Safely retrieve a Redis key via middleware.
-
-        Parameters
-        ----------
-        key : str
-            Redis key name.
+        Retrieve city from Redis, or infer it from the system timezone as fallback.
 
         Returns
         -------
@@ -143,12 +142,13 @@ class BehaviourClock:
         - Queries wttr.in JSON API.
         - Matches the closest hourly entry to the current hour.
         - Maps weather description to one of the display icon keys.
-        - Falls back to (20, "no_internet") on any error.
+        - Falls back to (None, "no_internet") on any error.
 
         Returns
         -------
-        tuple[int, str]
+        tuple[int or None, str]
             Temperature in Celsius and weather icon key string.
+            Temperature is None when there is no internet connection.
         """
         url = f"https://wttr.in/{self.city}?format=j1"
         try:
@@ -183,6 +183,7 @@ class BehaviourClock:
         --------
         - Top half: weather condition icon.
         - Bottom half: temperature digits, degree dot, and "C" label.
+          Skipped entirely when there is no internet connection.
         - Halves are merged into a full 13x13 canvas.
 
         Returns
@@ -311,7 +312,7 @@ class BehaviourClock:
         - Fades in the clock image, holds for 1.5 seconds, fades out.
         - Fades in the weather image, holds for 1.5 seconds, fades out.
         - Fades in the battery image, holds for 1.5 seconds with live percentage
-        updates every 100ms, fades out.
+          updates every 100ms, fades out.
         - Aborts at any step if blush becomes active.
         """
         if self.is_blush_active():
