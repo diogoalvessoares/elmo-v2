@@ -108,10 +108,10 @@ class BehaviourOuch:
         """
         self.node.loginfo("ouching")
         self.activity.ouch = True
-        self.onboard.video = self.server.url_for_image("normal.png")
+        self.onboard.video = self.server.url_for_video("ouch_tears_open.mp4")
         time.sleep(5.5)
         self.onboard.video = None
-        self.onboard.image = self.server.url_for_video("ouch_tears_open.mp4")
+        self.onboard.image = self.server.url_for_image("normal.png")
         self.activity.ouch = False
         self.sleep.last_interaction = time.time()
 
