@@ -17,6 +17,8 @@ import requests
 import middleware as mw
 
 
+CITY = "Lisbon"
+
 class BehaviourClock:
     """
     Middleware behaviour that displays a clock and weather sequence on touch.
@@ -53,30 +55,7 @@ class BehaviourClock:
         self.behaviours = mw.Behaviours()
         self.battery = mw.Battery()
         self.activity = mw.Activity()
-        self.city = self.get_city()
-
-    def get_city(self):
-        """
-        Retrieve city from Redis, or infer it from the system timezone as fallback.
-
-        Returns
-        -------
-        str
-            City name used for weather queries.
-        """
-        try:
-            return mw.get_key("city")
-        except (TypeError, ValueError):
-            tz_map = {
-                "GMT": "Lisbon",
-                "WET": "Lisbon",
-                "CET": "Paris",
-                "EST": "New York",
-                "EDT": "New York",
-                "PST": "Los Angeles",
-                "PDT": "Los Angeles",
-            }
-            return tz_map.get(time.tzname[0], "Lisbon")
+        self.city = CITY
 
     def get_night(self):
         """
